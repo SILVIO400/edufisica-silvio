@@ -138,6 +138,7 @@
                 }));
                 setNewStudentName('');
             };
+
             const handleRemoveStudent = (alunoId) => {
                 setTurmas(prev => prev.map(t => {
                     if (t.nome === selectedTurma) {
@@ -290,7 +291,7 @@
                                     <div>
                                         <label className="block text-xs font-bold text-gray-500 mb-1">Turma</label>
                                         <select value={novaAula.turma} onChange={e => setNovaAula({...novaAula, turma: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg text-gray-800 font-medium">
-                                            {TURMAS_PADRAO.map(t => <option key={t} value={t}>{t}</option>)}
+                                            {TURMAS_PADRAO.map(t => <option key={t.nome} value={t}>{t}</option>)}
                                         </select>
                                     </div>
                                     <div>
@@ -382,6 +383,10 @@
                                             </div>
                                         ))}
                                     </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
                 );
             };
 
