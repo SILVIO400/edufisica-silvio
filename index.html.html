@@ -138,6 +138,14 @@
                 }));
                 setNewStudentName('');
             };
+            const handleRemoveStudent = (alunoId) => {
+                setTurmas(prev => prev.map(t => {
+                    if (t.nome === selectedTurma) {
+                        return { ...t, alunos: t.alunos.filter(a => a.id !== alunoId) };
+                    }
+                    return t;
+                }));
+            };
 
             // --- LÓGICA DE AULAS E JUSTIFICATIVAS ---
             const iniciarAula = () => {
@@ -360,19 +368,20 @@
                                     </div>
                                     <div className="divide-y divide-gray-50 max-h-96 overflow-y-auto">
                                         {turmaAtual.alunos.map((aluno, idx) => (
-                                            <div key={aluno.id} className="py-2.5 flex justify-between items-center">
+                                            <div key={aluno.id} className="py-2.5 flex justify-between items-center group">
                                                 <div className="flex items-center gap-3">
                                                     <span className="text-gray-400 text-xs w-4">{idx+1}.</span>
                                                     <span className="text-gray-800 text-sm font-bold">{aluno.nome}</span>
                                                 </div>
-                                                <span className="text-[10px] font-mono bg-gray-100 px-2 py-1 rounded text-gray-500">{aluno.codigo}</span>
+                                                <div className="flex items-center gap-3">
+                                                    <span className="text-[10px] font-mono bg-gray-100 px-2 py-1 rounded text-gray-500">{aluno.codigo}</span>
+                                                    <button onClick={() => handleRemoveStudent(aluno.id)} className="text-red-400 hover:bg-red-50 px-2 py-1 rounded transition-colors" title="Excluir Aluno">
+                                                        <i className="fas fa-trash"></i>
+                                                    </button>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
-                                </div>
-                            </div>
-                        )}
-                    </div>
                 );
             };
 
