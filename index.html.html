@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>EduFísica App - Online</title>
+    
+    <!-- React & Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        @media print {
+            .print\:hidden { display: none !important; }
+            .print\:p-0 { padding: 0 !important; }
+            body { background-color: white !important; }
+            .page-break-inside-avoid { break-inside: avoid; }
+        }
+        select { -webkit-appearance: none; -moz-appearance: none; appearance: none; }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div id="root"></div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        window.FirebaseHelper = {
+            initializeApp, getAuth, signInAnonymously, signInWithCustomToken,
+            getFirestore, doc, setDoc, onSnapshot, collection, getDocs
+        };
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const TURMAS_PADRAO = ['8º A', '8º B', '8º C', '8º D', '8º E', '8º F', '8º G', 'EJA A', 'EJA B'];
+        const HORARIOS = [
+            "1º horário", "2º horário", "3º horário", "4º horário", "5º horário", "6º horário",
+            "1º e 2º horários", "2º e 3º horários", "3º e 4º horários", "4º e 5º horários", "5º e 6º horários"
+        ];
+
+        const generateId = () => window.crypto?.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+
+        function App() {
+            // Estado de carregamento e nuvem
+            const [isCloudReady, setIsCloudReady] = useState(false);
+            const [userId, setUserId] = useState(null);
+            const [db, setDb] = useState(null);
+            const [appId, setAppId] = useState('edufisica-app-v2');
+            const [cloudError, setCloudError] = useState(null);
+            const [localMode, setLocalMode] = useState(false);
+
+            // Estados do App
+            const [activeTab, setActiveTab] = useState('aulas');
+            const [turmas, setTurmas] = useState([]);
+            const [aulas, setAulas] = useState([]);
+            
+            // Estados Visuais
+            const [selectedTurma, setSelectedTurma] = useState(TURMAS_PADRAO[0]);
+            const [bulkText, setBulkText] = useState('');
+            const [newStudentName, setNewStudentName] = useState('');
+            const [activeSession, setActiveSession] = useState(null);
+            const [printMode, setPrintMode] = useState(null);
+
+            const defaultDate = new Date().toISOString().split('T')[0];
+
+            const [novaAula, setNovaAula] = useState({
+                titulo: 'Aula Prática - ',
+                data: defaultDate,
+                horario: HORARIOS[0],
+                turma: TURMAS_PADRAO[0]
+            });
+
+            useEffect(() => {
+                const initFirebase = async () => {
+                    if (!window.FirebaseHelper) {
+                        setTimeout(initFirebase, 100);
+                        return;
+                    }
+
+                    // Detecção de arquivo local (quando aberto direto do PC)
+                    if (window.location.protocol === 'file:') {
+                        setCloudError("Você abriu o arquivo direto do seu computador. A nuvem bloqueia acessos locais por segurança. Para salvar e usar online, o app precisará estar hospedado na internet.");
+                        setLocalMode(true);
+                        setIsCloudReady(true);
+                        return;
+                    }
+
+                    const { initializeApp, getAuth, signInWithCustomToken, signInAnonymously, getFirestore } = window.FirebaseHelper;
+                    
+                    const envAppId = typeof __app_id !== 'undefined' ? __app_id : 'edufisica-app-v2';
+                    setAppId(envAppId);
+
+                    const config = typeof __firebase_config !== 'undefined' 
+                        ? JSON.parse(__firebase_config) 
+                        : { projectId: "demo-project" }; // Mock para rodar sem falhas visuais
+
+                    try {
+                        const app = initializeApp(config);
+                        const auth = getAuth(app);
+                        const firestore = getFirestore(app);
+                        setDb(firestore);
+
+                        let userCred;
+                        if (typeof __initial_auth_token !== 'undefined') {
+                            userCred = await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            userCred = await signInAnonymously(auth);
+                        }
+                        
+                        setUserId(userCred.user.uid);
+                    } catch (error) {
+                        console.error("Erro na autenticação (Nuvem):", error);
+                        setCloudError("Erro de conexão com o banco de dados. O aplicativo funcionará como teste e os dados desta sessão não serão salvos.");
+                        setLocalMode(true);
+                        setIsCloudReady(true);
+                    }
+                };
+                initFirebase();
+            }, []);
+
+            // Preenche as turmas padrão se a pessoa estiver no modo teste local
+            useEffect(() => {
+                if (localMode) {
+                    setTurmas(TURMAS_PADRAO.map(nome => ({ id: nome, nome: nome, alunos: [] })));
+                }
+            }, [localMode]);
+
+            useEffect(() => {
+                if (!userId || !db) return;
+
+                const { collection, onSnapshot, getDocs, doc, setDoc } = window.FirebaseHelper;
+                const turmasRef = collection(db, 'artifacts', appId, 'users', userId, 'turmas');
+                const aulasRef = collection(db, 'artifacts', appId, 'users', userId, 'aulas');
+
+                // Garante que as turmas padrão existam
+                const checkDefaults = async () => {
+                    try {
+                        const snap = await getDocs(turmasRef);
+                        if (snap.empty) {
+                            for (const nome of TURMAS_PADRAO) {
+                                await setDoc(doc(turmasRef, nome), { id: nome, nome: nome, alunos: [] });
+                            }
+                        }
+                    } catch (e) { console.error("Erro ao criar padrões", e); }
+                };
+                checkDefaults();
+
+                // Sincronização em tempo real (Ouve a nuvem e atualiza a tela)
+                const unsubTurmas = onSnapshot(turmasRef, (snap) => {
+                    const data = snap.docs.map(d => d.data());
+                    data.sort((a,b) => TURMAS_PADRAO.indexOf(a.nome) - TURMAS_PADRAO.indexOf(b.nome));
+                    setTurmas(data);
+                    setIsCloudReady(true);
+                }, (error) => console.error("Erro nas turmas", error));
+
+                const unsubAulas = onSnapshot(aulasRef, (snap) => {
+                    const data = snap.docs.map(d => d.data());
+                    // Ordena por data
+                    data.sort((a,b) => new Date(a.data) - new Date(b.data));
+                    setAulas(data);
+                    
+                    // Se houver uma aula ativa, atualiza os dados dela
+                    setActiveSession(current => {
+                        if (!current) return null;
+                        const atualizada = data.find(a => a.id === current.id);
+                        return atualizada || current;
+                    });
+                }, (error) => console.error("Erro nas aulas", error));
+
+                return () => { unsubTurmas(); unsubAulas(); };
+            }, [userId, db, appId]);
+
+            const saveTurmaToCloud = async (turmaAtualizada) => {
+                if (localMode) {
+                    setTurmas(prev => prev.map(t => t.id === turmaAtualizada.id ? turmaAtualizada : t));
+                    return;
+                }
+                if (!db || !userId) return;
+                const { doc, setDoc } = window.FirebaseHelper;
+                await setDoc(doc(db, 'artifacts', appId, 'users', userId, 'turmas', turmaAtualizada.id), turmaAtualizada);
+            };
+
+            const saveAulaToCloud = async (aulaAtualizada) => {
+                if (localMode) {
+                    setAulas(prev => {
+                        const exists = prev.find(a => a.id === aulaAtualizada.id);
+                        if (exists) return prev.map(a => a.id === aulaAtualizada.id ? aulaAtualizada : a);
+                        return [...prev, aulaAtualizada];
+                    });
+                    return;
+                }
+                if (!db || !userId) return;
+                const { doc, setDoc } = window.FirebaseHelper;
+                await setDoc(doc(db, 'artifacts', appId, 'users', userId, 'aulas', aulaAtualizada.id), aulaAtualizada);
+            };
+
+            const handleBulkInsert = async () => {
+                if (!bulkText.trim()) return;
+                const names = bulkText.split('\n').filter(n => n.trim() !== '');
+                const turmaAtual = turmas.find(t => t.nome === selectedTurma);
+                
+                if (turmaAtual) {
+                    const prefix = turmaAtual.nome.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+                    const currentCount = turmaAtual.alunos.length;
+                    const newStudents = names.map((name, index) => {
+                        const num = (currentCount + index + 1).toString().padStart(2, '0');
+                        return { id: generateId(), nome: name.trim(), codigo: `${prefix}${num}` };
+                    });
+                    
+                    const updated = { ...turmaAtual, alunos: [...turmaAtual.alunos, ...newStudents] };
+                    await saveTurmaToCloud(updated);
+                }
+                setBulkText('');
+            };
+
+            const handleAddSingleStudent = async () => {
+                if (!newStudentName.trim()) return;
+                const turmaAtual = turmas.find(t => t.nome === selectedTurma);
+                
+                if (turmaAtual) {
+                    const prefix = turmaAtual.nome.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+                    const num = (turmaAtual.alunos.length + 1).toString().padStart(2, '0');
+                    const newStudent = { id: generateId(), nome: newStudentName.trim(), codigo: `${prefix}${num}` };
+                    
+                    const updated = { ...turmaAtual, alunos: [...turmaAtual.alunos, newStudent] };
+                    await saveTurmaToCloud(updated);
+                }
+                setNewStudentName('');
+            };
+
+            const iniciarAula = async () => {
+                if (!novaAula.titulo.trim()) return alert("Dê um título para a aula");
+                
+                const turmaAtual = turmas.find(t => t.nome === novaAula.turma);
+                // MÁGICA AQUI: Puxa todos os IDs da turma e já coloca na lista de presença!
+                const todosOsAlunosIds = turmaAtual ? turmaAtual.alunos.map(a => a.id) : [];
+
+                const novaSessao = { 
+                    id: generateId(), 
+                    ...novaAula, 
+                    presencas: todosOsAlunosIds, // Todos começam presentes
+                    justificativas: {} // Objeto para guardar atestados, etc
+                };
+                
+                await saveAulaToCloud(novaSessao);
+                setActiveSession(novaSessao);
+                setNovaAula({ ...novaAula, titulo: 'Aula Prática - ' });
+            };
+
+            const togglePresenca = async (alunoId) => {
+                if (!activeSession) return;
+                
+                const isPresent = activeSession.presencas.includes(alunoId);
+                const justificativaAtual = activeSession.justificativas[alunoId] || '';
+
+                const novasPresencas = isPresent 
+                    ? activeSession.presencas.filter(id => id !== alunoId) // Desmarca
+                    : [...activeSession.presencas, alunoId]; // Marca
+
+                const sessionAtualizada = { ...activeSession, presencas: novasPresencas };
+
+                // Se remarcou como presente, limpa justificativas de falta
+                if (!isPresent && (justificativaAtual === 'Ausência' || justificativaAtual === 'Negativa Deliberada')) {
+                    sessionAtualizada.justificativas = { ...sessionAtualizada.justificativas };
+                    delete sessionAtualizada.justificativas[alunoId];
+                }
+
+                // Atualiza tela instantaneamente para parecer rápido, e salva na nuvem no fundo
+                setActiveSession(sessionAtualizada); 
+                await saveAulaToCloud(sessionAtualizada);
+            };
+
+            const changeJustificativa = async (alunoId, novaJustificativa) => {
+                if (!activeSession) return;
+
+                const sessionAtualizada = { ...activeSession };
+                sessionAtualizada.justificativas = { ...sessionAtualizada.justificativas, [alunoId]: novaJustificativa };
+
+                // Regra: Negativa ou Ausência = remove presença automaticamente
+                if (novaJustificativa === 'Ausência' || novaJustificativa === 'Negativa Deliberada') {
+                    sessionAtualizada.presencas = sessionAtualizada.presencas.filter(id => id !== alunoId);
+                } 
+                // Atestado Médico ou Problema de Saúde mantem do jeito que o professor deixou (presença ou não)
+
+                if (novaJustificativa === "") {
+                    delete sessionAtualizada.justificativas[alunoId];
+                }
+
+                setActiveSession(sessionAtualizada);
+                await saveAulaToCloud(sessionAtualizada);
+            };
+
+
+            const renderAulas = () => {
+                if (activeSession) {
+                    const turmaAtual = turmas.find(t => t.nome === activeSession.turma);
+                    return (
+                        <div className="space-y-4">
+                            <div className="bg-emerald-600 text-white p-4 rounded-xl shadow-md">
+                                <div className="flex justify-between items-start">
+                                    <div>
+                                        <h2 className="text-xl font-bold">{activeSession.titulo}</h2>
+                                        <p className="text-sm opacity-90">{activeSession.turma} • {activeSession.data} • {activeSession.horario}</p>
+                                    </div>
+                                    <div className="bg-white/20 px-3 py-1 rounded-lg text-center">
+                                        <p className="text-2xl font-black">{activeSession.presencas.length}</p>
+                                        <p className="text-[10px] uppercase tracking-wide">Presentes</p>
+                                    </div>
+                                </div>
+                                <button onClick={() => setActiveSession(null)} className="mt-4 bg-white text-emerald-700 px-4 py-3 rounded-lg font-bold text-sm w-full flex justify-center items-center gap-2 shadow-sm">
+                                    <i className="fas fa-check-circle"></i> Concluir e Salvar Aula
+                                </button>
+                            </div>
+
+                            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                                <h3 className="font-semibold text-gray-700 p-4 bg-gray-50 border-b border-gray-100 text-sm flex items-center gap-2">
+                                    <i className="fas fa-list-check text-emerald-600"></i> Desmarque quem não participou
+                                </h3>
+                                <div className="divide-y divide-gray-100">
+                                    {turmaAtual?.alunos.map(aluno => {
+                                        const isPresent = activeSession.presencas.includes(aluno.id);
+                                        const justificativa = activeSession.justificativas?.[aluno.id] || '';
+                                        
+                                        return (
+                                            <div key={aluno.id} className={`p-4 flex flex-col gap-2 transition-colors ${isPresent ? 'bg-emerald-50/50' : 'bg-red-50/50'}`}>
+                                                <div className="flex items-center justify-between">
+                                                    {/* Botão Clicável de Presença */}
+                                                    <div className="flex items-center gap-3 flex-1 cursor-pointer" onClick={() => togglePresenca(aluno.id)}>
+                                                        <div>
+                                                            {isPresent ? 
+                                                                <i className="fas fa-check-circle text-emerald-500 text-3xl"></i> : 
+                                                                <i className="fas fa-times-circle text-red-400 text-3xl opacity-50"></i>
+                                                            }
+                                                        </div>
+                                                        <div>
+                                                            <p className={`font-bold ${isPresent ? 'text-emerald-900' : 'text-gray-500 line-through'}`}>{aluno.nome}</p>
+                                                            <p className="text-[10px] text-gray-400 font-mono tracking-wider">{aluno.codigo}</p>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                
+                                                {/* Dropdown de Justificativa */}
+                                                <div className="pl-10">
+                                                    <div className="relative">
+                                                        <select 
+                                                            value={justificativa} 
+                                                            onChange={(e) => changeJustificativa(aluno.id, e.target.value)}
+                                                            className={`w-full text-xs p-2 rounded border font-medium outline-none appearance-none cursor-pointer
+                                                                ${justificativa === '' ? 'bg-white border-gray-200 text-gray-400' : 
+                                                                  justificativa.includes('Saúde') || justificativa.includes('Médico') ? 'bg-orange-50 border-orange-200 text-orange-700' : 
+                                                                  'bg-red-50 border-red-200 text-red-700'}`
+                                                            }
+                                                        >
+                                                            <option value="">Nenhuma observação</option>
+                                                            <option value="Atestado Médico">😷 Atestado Médico</option>
+                                                            <option value="Problema de Saúde">🤒 Problema de Saúde</option>
+                                                            <option value="Negativa Deliberada">🚫 Negativa Deliberada</option>
+                                                            <option value="Ausência">❌ Ausência (Faltou)</option>
+                                                        </select>
+                                                        <i className="fas fa-chevron-down absolute right-3 top-2.5 text-xs text-gray-400 pointer-events-none"></i>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                    {(!turmaAtual?.alunos || turmaAtual.alunos.length === 0) && (
+                                        <p className="p-4 text-gray-500 text-center text-sm">Nenhum aluno cadastrado nesta turma.</p>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    );
+                }
+
+                return (
+                    <div className="space-y-6">
+                        <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                            <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><i className="fas fa-play text-emerald-600"></i> Registrar Aula Prática</h2>
+                            <div className="space-y-4">
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 mb-1">Turma</label>
+                                        <select value={novaAula.turma} onChange={e => setNovaAula({...novaAula, turma: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg text-gray-800 font-medium">
+                                            {TURMAS_PADRAO.map(t => <option key={t} value={t}>{t}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 mb-1">Data</label>
+                                        <input type="date" value={novaAula.data} onChange={e => setNovaAula({...novaAula, data: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg text-gray-800 font-medium" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 mb-1">Horário</label>
+                                    <select value={novaAula.horario} onChange={e => setNovaAula({...novaAula, horario: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg text-gray-800 font-medium">
+                                        <optgroup label="Horários Únicos">
+                                            {HORARIOS.slice(0, 6).map(h => <option key={h} value={h}>{h}</option>)}
+                                        </optgroup>
+                                        <optgroup label="Aulas Duplas">
+                                            {HORARIOS.slice(6).map(h => <option key={h} value={h}>{h}</option>)}
+                                        </optgroup>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 mb-1">Título/Atividade</label>
+                                    <input type="text" value={novaAula.titulo} onChange={e => setNovaAula({...novaAula, titulo: e.target.value})} placeholder="Ex: Futsal, Vôlei, Circuito..." className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg text-gray-800" />
+                                </div>
+                                <button onClick={iniciarAula} className="w-full mt-2 bg-emerald-600 hover:bg-emerald-700 text-white p-4 rounded-lg font-bold flex justify-center items-center gap-2 transition-colors shadow-sm">
+                                    <i className="fas fa-list-check"></i> Abrir Diário e Fazer Chamada
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Histórico Recente */}
+                        <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                            <h3 className="text-xs font-bold text-gray-400 mb-3 uppercase tracking-wider">Aulas Recentes (Salvas na Nuvem)</h3>
+                            {aulas.length === 0 ? <p className="text-gray-400 text-sm text-center py-4">Nenhuma aula na nuvem.</p> : (
+                                <div className="space-y-3">
+                                    {aulas.slice().reverse().map(aula => (
+                                        <div key={aula.id} onClick={() => setActiveSession(aula)} className="p-3 bg-gray-50 rounded-lg border border-gray-100 flex justify-between items-center cursor-pointer hover:bg-gray-100">
+                                            <div>
+                                                <p className="font-bold text-gray-800 text-sm">{aula.titulo}</p>
+                                                <p className="text-[11px] text-gray-500 mt-1">{aula.turma} • {aula.data.split('-').reverse().join('/')} • {aula.horario}</p>
+                                            </div>
+                                            <div className="text-right">
+                                                <div className="bg-emerald-100 text-emerald-800 text-xs font-bold px-2 py-1 rounded">{aula.presencas.length} P</div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            };
+
+            const renderTurmas = () => {
+                const turmaAtual = turmas.find(t => t.nome === selectedTurma);
+                return (
+                    <div className="space-y-4">
+                        <div className="bg-white p-3 rounded-xl shadow-sm border border-gray-100 flex overflow-x-auto gap-2 pb-3 scrollbar-hide">
+                            {TURMAS_PADRAO.map(nome => (
+                                <button key={nome} onClick={() => setSelectedTurma(nome)} className={`flex-shrink-0 px-4 py-2 rounded-lg font-bold text-sm transition-colors ${selectedTurma === nome ? 'bg-gray-800 text-white shadow-md' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                                    {nome}
+                                </button>
+                            ))}
+                        </div>
+                        {(!turmaAtual || turmaAtual.alunos.length === 0) ? (
+                            <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                                <h3 className="font-bold text-gray-800 mb-2">Turma Vazia</h3>
+                                <p className="text-sm text-gray-500 mb-4">Cole a lista de alunos (um por linha).</p>
+                                <textarea rows="8" value={bulkText} onChange={e => setBulkText(e.target.value)} placeholder="João Silva&#10;Maria Oliveira..." className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm mb-3" />
+                                <button onClick={handleBulkInsert} className="w-full bg-gray-800 text-white p-3 rounded-lg font-bold flex justify-center items-center gap-2">
+                                    <i className="fas fa-users"></i> Salvar Alunos
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                                    <h3 className="font-bold text-gray-800 text-sm">{turmaAtual.nome} - {turmaAtual.alunos.length} Alunos</h3>
+                                    <button onClick={() => setPrintMode('cards')} className="text-gray-600 bg-white border border-gray-200 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 shadow-sm">
+                                        <i className="fas fa-qrcode"></i> Cartões QR
+                                    </button>
+                                </div>
+                                <div className="p-4">
+                                    <div className="flex gap-2 mb-4">
+                                        <input type="text" value={newStudentName} onChange={e => setNewStudentName(e.target.value)} placeholder="Aluno novato..." className="flex-1 p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm" />
+                                        <button onClick={handleAddSingleStudent} className="bg-emerald-600 text-white px-3 rounded-lg flex items-center gap-1 text-sm font-bold shadow-sm">
+                                            <i className="fas fa-plus"></i> Add
+                                        </button>
+                                    </div>
+                                    <div className="divide-y divide-gray-50 max-h-96 overflow-y-auto pr-2">
+                                        {turmaAtual.alunos.map((aluno, idx) => (
+                                            <div key={aluno.id} className="py-2.5 flex justify-between items-center">
+                                                <div className="flex items-center gap-3">
+                                                    <span className="text-gray-400 text-xs w-4">{idx+1}.</span>
+                                                    <span className="text-gray-800 text-sm font-bold">{aluno.nome}</span>
+                                                </div>
+                                                <span className="text-[10px] font-mono bg-gray-100 px-2 py-1 rounded text-gray-500">{aluno.codigo}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                );
+            };
+
+            const renderRelatorios = () => {
+                const turmaAtual = turmas.find(t => t.nome === selectedTurma);
+                const aulasDaTurma = aulas.filter(a => a.turma === selectedTurma);
+                return (
+                    <div className="space-y-4">
+                        <div className="bg-white p-3 rounded-xl shadow-sm border border-gray-100 flex flex-wrap gap-2 pb-3">
+                            {TURMAS_PADRAO.map(nome => (
+                                <button key={nome} onClick={() => setSelectedTurma(nome)} className={`px-4 py-2 rounded-lg font-bold text-sm transition-colors ${selectedTurma === nome ? 'bg-gray-800 text-white shadow-md' : 'bg-gray-100 text-gray-600'}`}>{nome}</button>
+                            ))}
+                        </div>
+                        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                            <div className="flex justify-between items-center mb-4">
+                                <div>
+                                    <h3 className="font-bold text-gray-800">Diário Consolidado</h3>
+                                    <p className="text-xs text-gray-500">P = Presente | F = Falta | ND = Negativa Deliberada | AM = Atestado | PS = Problema Saúde</p>
+                                </div>
+                                <button onClick={() => setPrintMode('report')} className="bg-gray-800 text-white px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 shadow-sm">
+                                    <i className="fas fa-print"></i> PDF
+                                </button>
+                            </div>
+                            {aulasDaTurma.length === 0 ? <p className="text-gray-500 text-sm text-center py-6">Nenhuma aula registrada.</p> : (
+                                <div className="overflow-x-auto rounded-lg border border-gray-200">
+                                    <table className="w-full text-sm text-left whitespace-nowrap">
+                                        <thead className="text-xs text-gray-700 uppercase bg-gray-100">
+                                            <tr>
+                                                <th className="px-4 py-3 font-bold border-b border-gray-200">Aluno</th>
+                                                {aulasDaTurma.map(aula => <th key={aula.id} className="px-4 py-3 text-center border-b border-gray-200" title={aula.titulo}>{aula.data.split('-').reverse().slice(0,2).join('/')}</th>)}
+                                                <th className="px-4 py-3 text-center border-b border-gray-200 font-bold">Total P</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {turmaAtual?.alunos.map(aluno => {
+                                                const totalPresencas = aulasDaTurma.filter(a => a.presencas.includes(aluno.id)).length;
+                                                return (
+                                                    <tr key={aluno.id} className="border-b border-gray-50 hover:bg-gray-50">
+                                                        <td className="px-4 py-3 font-medium text-gray-900 border-r border-gray-100">{aluno.nome}</td>
+                                                        {aulasDaTurma.map(aula => {
+                                                            const isPresent = aula.presencas.includes(aluno.id);
+                                                            const just = aula.justificativas?.[aluno.id];
+                                                            
+                                                            let sigla = <span className="text-emerald-500 font-bold">P</span>;
+                                                            if (!isPresent) {
+                                                                if (just === 'Atestado Médico') sigla = <span className="text-orange-500 font-bold">AM</span>;
+                                                                else if (just === 'Problema de Saúde') sigla = <span className="text-orange-500 font-bold">PS</span>;
+                                                                else if (just === 'Negativa Deliberada') sigla = <span className="text-red-500 font-bold">ND</span>;
+                                                                else sigla = <span className="text-red-500 font-bold">F</span>; // Negativa ou Ausência
+                                                            } else if (just) {
+                                                                // Se está presente mas tem justificativa (ex: fez atividade teórica)
+                                                                sigla = <span className="text-blue-500 font-bold" title={just}>P*</span>;
+                                                            }
+
+                                                            return <td key={aula.id} className="px-4 py-3 text-center border-r border-gray-100">{sigla}</td>
+                                                        })}
+                                                        <td className="px-4 py-3 text-center font-bold text-emerald-600 bg-emerald-50/30">{totalPresencas}</td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            };
+
+            if (printMode === 'report') {
+                const turmaAtual = turmas.find(t => t.nome === selectedTurma);
+                const aulasDaTurma = aulas.filter(a => a.turma === selectedTurma);
+                return (
+                    <div className="bg-white min-h-screen p-8 print:p-0">
+                        <div className="print:hidden mb-6 flex justify-between items-center">
+                            <button onClick={() => setPrintMode(null)} className="bg-gray-200 px-4 py-2 rounded-lg font-bold">Voltar</button>
+                            <button onClick={() => window.print()} className="bg-gray-800 text-white px-4 py-2 rounded-lg font-bold flex gap-2"><i className="fas fa-print"></i> Imprimir</button>
+                        </div>
+                        <div className="mb-6 border-b-2 border-gray-800 pb-4">
+                            <h1 className="text-2xl font-black uppercase tracking-tight">Diário - Aulas Práticas (Educação Física)</h1>
+                            <h2 className="text-xl font-bold text-gray-600">Turma: {selectedTurma}</h2>
+                            <p className="text-sm mt-2 text-gray-500 font-medium">Legenda: P = Presente | F = Falta | ND = Negativa Deliberada | AM = Atestado | PS = Problema de Saúde</p>
+                        </div>
+                        <table className="w-full text-xs text-left border-collapse border border-gray-300">
+                            <thead>
+                                <tr className="bg-gray-100">
+                                    <th className="border border-gray-300 p-2 w-1/4">Aluno</th>
+                                    {aulasDaTurma.map(aula => <th key={aula.id} className="border border-gray-300 p-1 text-center font-bold" title={aula.titulo}>{aula.data.split('-').reverse().slice(0,2).join('/')}<br/><span className="text-[9px] font-normal">{aula.horario.split(' ')[0]}</span></th>)}
+                                    <th className="border border-gray-300 p-2 text-center font-bold">Total P.</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {turmaAtual?.alunos.map((aluno, idx) => {
+                                    const totalPresencas = aulasDaTurma.filter(a => a.presencas.includes(aluno.id)).length;
+                                    return (
+                                    <tr key={aluno.id}>
+                                        <td className="border border-gray-300 p-2 font-medium"><span className="text-gray-400 mr-2">{idx+1}.</span>{aluno.nome}</td>
+                                        {aulasDaTurma.map(aula => {
+                                            const isPresent = aula.presencas.includes(aluno.id);
+                                            const just = aula.justificativas?.[aluno.id];
+                                            let text = 'P';
+                                            if (!isPresent) {
+                                                if (just === 'Atestado Médico') text = 'AM';
+                                                else if (just === 'Problema de Saúde') text = 'PS';
+                                                else if (just === 'Negativa Deliberada') text = 'ND';
+                                                else text = 'F';
+                                            }
+                                            return <td key={aula.id} className={`border border-gray-300 p-1 text-center font-bold ${text==='P'?'':'text-gray-500'}`}>{text}</td>
+                                        })}
+                                        <td className="border border-gray-300 p-1 text-center font-bold">{totalPresencas}</td>
+                                    </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                );
+            }
+
+            if (!isCloudReady) {
+                return <div className="min-h-screen flex items-center justify-center bg-gray-100"><div className="text-center"><i className="fas fa-circle-notch fa-spin text-4xl text-emerald-600 mb-3"></i><p className="font-bold text-gray-600">Conectando à nuvem...</p></div></div>
+            }
+
+            return (
+                <div className="min-h-screen bg-gray-100 font-sans sm:py-8 flex justify-center">
+                    <div className="w-full max-w-md bg-gray-50 min-h-screen sm:min-h-[800px] sm:h-[800px] sm:rounded-[2rem] sm:shadow-2xl sm:border-8 border-gray-900 relative overflow-hidden flex flex-col">
+                        <header className="bg-gray-900 text-white p-5 pt-8 sm:pt-6 rounded-b-3xl shadow-md z-10">
+                            <div className="flex justify-between items-center">
+                                <div>
+                                    <h1 className="text-2xl font-black tracking-tight flex items-center gap-2">
+                                        <i className="fas fa-running text-emerald-400"></i> EduFísica
+                                    </h1>
+                                    <p className="text-gray-400 text-xs font-bold mt-1 tracking-widest uppercase">Controle de Aulas <span className="text-emerald-400">• Online</span></p>
+                                </div>
+                            </div>
+                        </header>
+                        
+                        {cloudError && (
+                            <div className="bg-orange-100 border-l-4 border-orange-500 text-orange-700 p-3 mx-4 mt-4 text-xs rounded shadow-sm">
+                                <p className="font-bold"><i className="fas fa-exclamation-triangle"></i> Modo Teste Local</p>
+                                <p className="mt-1">{cloudError}</p>
+                            </div>
+                        )}
+
+                        <main className="flex-1 overflow-y-auto p-4 pb-24 scrollbar-hide">
+                            {activeTab === 'aulas' && renderAulas()}
+                            {activeTab === 'turmas' && renderTurmas()}
+                            {activeTab === 'relatorios' && renderRelatorios()}
+                        </main>
+                        <nav className="absolute bottom-0 w-full bg-white border-t border-gray-100 px-6 py-3 pb-6 sm:pb-3 flex justify-between items-center z-10 shadow-[0_-20px_40px_rgba(0,0,0,0.03)]">
+                            <button onClick={() => setActiveTab('aulas')} className={`flex flex-col items-center gap-1.5 transition-colors w-1/3 ${activeTab === 'aulas' ? 'text-emerald-600' : 'text-gray-400'}`}>
+                                <div className={`p-2 rounded-xl ${activeTab === 'aulas' ? 'bg-emerald-50' : ''}`}><i className="fas fa-clipboard-list text-xl"></i></div>
+                                <span className="text-[10px] font-black uppercase tracking-wider">Aulas</span>
+                            </button>
+                            <button onClick={() => setActiveTab('turmas')} className={`flex flex-col items-center gap-1.5 transition-colors w-1/3 ${activeTab === 'turmas' ? 'text-gray-900' : 'text-gray-400'}`}>
+                                <div className={`p-2 rounded-xl ${activeTab === 'turmas' ? 'bg-gray-100' : ''}`}><i className="fas fa-users text-xl"></i></div>
+                                <span className="text-[10px] font-black uppercase tracking-wider">Turmas</span>
+                            </button>
+                            <button onClick={() => setActiveTab('relatorios')} className={`flex flex-col items-center gap-1.5 transition-colors w-1/3 ${activeTab === 'relatorios' ? 'text-gray-900' : 'text-gray-400'}`}>
+                                <div className={`p-2 rounded-xl ${activeTab === 'relatorios' ? 'bg-gray-100' : ''}`}><i className="fas fa-file-pdf text-xl"></i></div>
+                                <span className="text-[10px] font-black uppercase tracking-wider">Diário</span>
+                            </button>
+                        </nav>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
