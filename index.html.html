@@ -4,14 +4,23 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>EduFísica App</title>
+    
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
     <style>
         .scrollbar-hide::-webkit-scrollbar { display: none; }
-        @media print { .print\:hidden { display: none !important; } }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        @media print {
+            .print\:hidden { display: none !important; }
+            .print\:p-0 { padding: 0 !important; }
+            body { background-color: white !important; }
+            .page-break-inside-avoid { break-inside: avoid; }
+            #root > div { min-height: auto !important; height: auto !important; border: none !important; box-shadow: none !important; border-radius: 0 !important; }
+        }
     </style>
 </head>
 <body class="bg-gray-100">
@@ -21,21 +30,51 @@
         const { useState, useEffect, useRef } = React;
 
         const TURMAS_INICIAIS = ['8º A', '8º B', '8º C', '8º D', '8º E', '8º F', '8º G', 'EJA A', 'EJA B'];
-        const HORARIOS = ["1º horário", "2º horário", "3º horário", "4º horário", "5º horário", "6º horário", "1º e 2º horários", "2º e 3º horários", "3º e 4º horários", "4º e 5º horários", "5º e 6º horários"];
+        const HORARIOS = [
+            "1º horário", "2º horário", "3º horário", "4º horário", "5º horário", "6º horário", 
+            "1º e 2º horários", "2º e 3º horários", "3º e 4º horários", "4º e 5º horários", "5º e 6º horários"
+        ];
 
-        const generateId = () => Math.random().toString(36).substring(2, 15);
+        const generateId = () => window.crypto && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
 
         function App() {
             const [activeTab, setActiveTab] = useState('aulas');
-            const [turmas, setTurmas] = useState(() => JSON.parse(localStorage.getItem('edufisica_turmas')) || TURMAS_INICIAIS.map(n => ({ nome: n, alunos: [] })));
-            const [aulas, setAulas] = useState(() => JSON.parse(localStorage.getItem('edufisica_aulas')) || []);
+            
+            // Carrega dados da memória (localStorage) ou usa padrão
+            const [turmas, setTurmas] = useState(() => {
+                const salvas = localStorage.getItem('edufisica_turmas');
+                return salvas ? JSON.parse(salvas) : TURMAS_INICIAIS.map(nome => ({ nome, alunos: [] }));
+            });
+            const [aulas, setAulas] = useState(() => {
+                const salvas = localStorage.getItem('edufisica_aulas');
+                return salvas ? JSON.parse(salvas) : [];
+            });
+
             const [selectedTurma, setSelectedTurma] = useState(TURMAS_INICIAIS[0]);
+            const [bulkText, setBulkText] = useState('');
+            const [newStudentName, setNewStudentName] = useState('');
             const [activeSession, setActiveSession] = useState(null);
             const [printMode, setPrintMode] = useState(null);
             const fileInputRef = useRef(null);
 
-            useEffect(() => { localStorage.setItem('edufisica_turmas', JSON.stringify(turmas)); }, [turmas]);
-            useEffect(() => { localStorage.setItem('edufisica_aulas', JSON.stringify(aulas)); }, [aulas]);
+            const now = new Date();
+            const defaultDate = now.toISOString().split('T')[0];
+
+            const [novaAula, setNovaAula] = useState({
+                titulo: 'Aula Prática - ',
+                data: defaultDate,
+                horario: HORARIOS[0],
+                turma: TURMAS_INICIAIS[0]
+            });
+
+            // Salva no celular sempre que alterar turmas ou aulas
+            useEffect(() => {
+                localStorage.setItem('edufisica_turmas', JSON.stringify(turmas));
+            }, [turmas]);
+
+            useEffect(() => {
+                localStorage.setItem('edufisica_aulas', JSON.stringify(aulas));
+            }, [aulas]);
 
             const exportData = () => {
                 const data = JSON.stringify({ turmas, aulas });
@@ -44,7 +83,9 @@
                 const a = document.createElement('a');
                 a.href = url;
                 a.download = 'backup_edufisica.json';
+                document.body.appendChild(a);
                 a.click();
+                document.body.removeChild(a);
             };
 
             const importData = (e) => {
@@ -54,78 +95,454 @@
                 reader.onload = (event) => {
                     try {
                         const data = JSON.parse(event.target.result);
-                        setTurmas(data.turmas);
-                        setAulas(data.aulas);
-                        alert("✅ Dados importados com sucesso!");
-                    } catch (e) { alert("❌ Erro ao ler arquivo."); }
+                        if(data.turmas && data.aulas) {
+                            setTurmas(data.turmas);
+                            setAulas(data.aulas);
+                            alert("✅ Backup importado com sucesso!");
+                        } else {
+                            alert("❌ Arquivo inválido.");
+                        }
+                    } catch (err) {
+                        alert("❌ Erro ao ler o arquivo de backup.");
+                    }
                 };
                 reader.readAsText(file);
+                e.target.value = ''; // reseta o input
             };
 
-            // ... (Restante da lógica igual) ...
-            // [Para economizar espaço, a lógica de presenças permanece a mesma do seu app, apenas adicionei os botões na renderRelatorios]
+            const handleBulkInsert = () => {
+                if (!bulkText.trim()) return;
+                const names = bulkText.split('\n').filter(n => n.trim() !== '');
+                
+                setTurmas(prev => prev.map(t => {
+                    if (t.nome === selectedTurma) {
+                        const prefix = t.nome.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+                        const currentCount = t.alunos.length;
+                        const newStudents = names.map((name, index) => {
+                            const num = (currentCount + index + 1).toString().padStart(2, '0');
+                            return { id: generateId(), nome: name.trim().toUpperCase(), codigo: `${prefix}${num}` };
+                        });
+                        return { ...t, alunos: [...t.alunos, ...newStudents] };
+                    }
+                    return t;
+                }));
+                setBulkText('');
+            };
+
+            const handleAddSingleStudent = () => {
+                if (!newStudentName.trim()) return;
+                setTurmas(prev => prev.map(t => {
+                    if (t.nome === selectedTurma) {
+                        const prefix = t.nome.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+                        const num = (t.alunos.length + 1).toString().padStart(2, '0');
+                        const newStudent = { id: generateId(), nome: newStudentName.trim().toUpperCase(), codigo: `${prefix}${num}` };
+                        return { ...t, alunos: [...t.alunos, newStudent] };
+                    }
+                    return t;
+                }));
+                setNewStudentName('');
+            };
+
+            const handleRemoveStudent = (alunoId) => {
+                if(confirm("Tem certeza que deseja excluir este aluno?")) {
+                    setTurmas(prev => prev.map(t => {
+                        if (t.nome === selectedTurma) {
+                            return { ...t, alunos: t.alunos.filter(a => a.id !== alunoId) };
+                        }
+                        return t;
+                    }));
+                }
+            };
+
+            const iniciarAula = () => {
+                if (!novaAula.titulo.trim()) return alert("Dê um título para a aula");
+                
+                const turmaAtual = turmas.find(t => t.nome === novaAula.turma);
+                const registrosIniciais = {};
+                
+                // Todos os alunos começam presentes (Verdinho) automaticamente
+                if(turmaAtual && turmaAtual.alunos) {
+                    turmaAtual.alunos.forEach(aluno => {
+                        registrosIniciais[aluno.id] = 'P';
+                    });
+                }
+
+                const novaSessao = { 
+                    id: generateId(), 
+                    ...novaAula, 
+                    registros: registrosIniciais 
+                };
+                
+                setAulas([...aulas, novaSessao]);
+                setActiveSession(novaSessao);
+                setNovaAula({ ...novaAula, titulo: 'Aula Prática - ' });
+            };
+
+            const alterarStatusAluno = (alunoId, novoStatus) => {
+                if (!activeSession) return;
+                setActiveSession(prev => {
+                    const novosRegistros = { ...prev.registros, [alunoId]: novoStatus };
+                    const sessionAtualizada = { ...prev, registros: novosRegistros };
+                    
+                    // Atualiza banco geral
+                    setAulas(aulasGlobais => aulasGlobais.map(a => a.id === sessionAtualizada.id ? sessionAtualizada : a));
+                    return sessionAtualizada;
+                });
+            };
+
+            const renderAulas = () => {
+                if (activeSession) {
+                    const turmaAtual = turmas.find(t => t.nome === activeSession.turma);
+                    
+                    return (
+                        <div className="space-y-4">
+                            <div className="bg-emerald-600 text-white p-4 rounded-xl shadow-md">
+                                <h2 className="text-xl font-bold">{activeSession.titulo}</h2>
+                                <p className="text-sm opacity-90">{activeSession.turma} • {activeSession.data} • {activeSession.horario}</p>
+                                <button onClick={() => setActiveSession(null)} className="mt-4 bg-white text-emerald-700 px-4 py-2 rounded-lg font-bold text-sm w-full shadow">
+                                    Concluir e Fechar Diário
+                                </button>
+                            </div>
+
+                            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                                <h3 className="font-semibold text-gray-700 p-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
+                                    <span>Lista de Presença</span>
+                                    <span className="bg-emerald-100 text-emerald-800 text-xs px-2 py-1 rounded-full font-bold">
+                                        {Object.values(activeSession.registros).filter(r => r === 'P').length} Presentes
+                                    </span>
+                                </h3>
+                                <div className="divide-y divide-gray-100">
+                                    {turmaAtual?.alunos.map((aluno, idx) => {
+                                        const status = activeSession.registros[aluno.id] || 'F';
+                                        
+                                        let iconColor = 'text-gray-300';
+                                        let bgColor = 'bg-white';
+                                        if (status === 'P') { iconColor = 'text-emerald-500'; bgColor = 'bg-emerald-50'; }
+                                        else if (status === 'F' || status === 'ND') { iconColor = 'text-red-500'; bgColor = 'bg-red-50'; }
+                                        else if (status === 'AM' || status === 'PS') { iconColor = 'text-blue-500'; bgColor = 'bg-blue-50'; }
+
+                                        return (
+                                            <div key={aluno.id} className={`p-4 flex flex-col gap-2 transition-colors ${bgColor}`}>
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-gray-400 text-xs">{idx+1}.</span>
+                                                        <p className="font-bold text-gray-800 text-sm">{aluno.nome}</p>
+                                                    </div>
+                                                    <i className={`fas fa-check-circle text-xl ${iconColor}`}></i>
+                                                </div>
+                                                <div className="flex justify-between items-center pl-6">
+                                                    <span className="text-xs text-gray-500 font-mono">{aluno.codigo}</span>
+                                                    <select 
+                                                        value={status} 
+                                                        onChange={(e) => alterarStatusAluno(aluno.id, e.target.value)}
+                                                        className="text-xs p-1.5 border border-gray-300 rounded bg-white text-gray-700 font-medium outline-none"
+                                                    >
+                                                        <option value="P">Presente na Prática (P)</option>
+                                                        <option value="F">Ausência / Falta (F)</option>
+                                                        <option value="ND">Negativa Deliberada (ND)</option>
+                                                        <option value="AM">Atestado Médico (AM)</option>
+                                                        <option value="PS">Problema de Saúde (PS)</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+                        </div>
+                    );
+                }
+
+                return (
+                    <div className="space-y-6">
+                        <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                            <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                                <i className="fas fa-running text-emerald-600"></i> Registrar Aula Prática
+                            </h2>
+                            <div className="space-y-3">
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 mb-1">Turma</label>
+                                        <select value={novaAula.turma} onChange={e => setNovaAula({...novaAula, turma: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg text-gray-800 font-medium">
+                                            {turmas.map(t => <option key={t.nome} value={t.nome}>{t.nome}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 mb-1">Data</label>
+                                        <input type="date" value={novaAula.data} onChange={e => setNovaAula({...novaAula, data: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg text-gray-800 font-medium" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-gray-500 mb-1">Horário</label>
+                                    <select value={novaAula.horario} onChange={e => setNovaAula({...novaAula, horario: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg text-gray-800 font-medium">
+                                        {HORARIOS.map(h => <option key={h} value={h}>{h}</option>)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-gray-500 mb-1">Título/Atividade</label>
+                                    <input type="text" value={novaAula.titulo} onChange={e => setNovaAula({...novaAula, titulo: e.target.value})} placeholder="Ex: Avaliação, Basquete..." className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg text-gray-800 font-medium" />
+                                </div>
+                                <button onClick={iniciarAula} className="w-full mt-4 bg-emerald-600 hover:bg-emerald-700 text-white p-3 rounded-lg font-bold flex justify-center items-center gap-2 transition-colors shadow-md">
+                                    <i className="fas fa-list-check"></i> Abrir Diário e Fazer Chamada
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                            <h3 className="text-sm font-bold text-gray-500 mb-3 uppercase tracking-wider">Histórico de Aulas</h3>
+                            {aulas.length === 0 ? <p className="text-gray-400 text-sm text-center py-4">Nenhum diário salvo.</p> : (
+                                <div className="space-y-3">
+                                    {aulas.slice().reverse().map(aula => (
+                                        <div key={aula.id} className="p-3 bg-gray-50 rounded-lg border border-gray-100 flex justify-between items-center">
+                                            <div>
+                                                <p className="font-bold text-gray-800 text-sm">{aula.titulo}</p>
+                                                <p className="text-xs text-gray-500">{aula.turma} • {aula.data.split('-').reverse().join('/')}</p>
+                                            </div>
+                                            <div className="bg-white border border-gray-200 px-2 py-1 rounded text-center">
+                                                <p className="text-xs font-bold text-emerald-600">
+                                                    {Object.values(aula.registros).filter(r => r === 'P').length} P
+                                                </p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            };
+
+            const renderTurmas = () => {
+                const turmaAtual = turmas.find(t => t.nome === selectedTurma);
+                return (
+                    <div className="space-y-4">
+                        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex overflow-x-auto gap-2 pb-4 scrollbar-hide">
+                            {turmas.map(t => (
+                                <button key={t.nome} onClick={() => setSelectedTurma(t.nome)} className={`flex-shrink-0 px-4 py-2 rounded-lg font-bold text-sm transition-colors ${selectedTurma === t.nome ? 'bg-slate-800 text-white shadow-md' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                                    {t.nome}
+                                </button>
+                            ))}
+                        </div>
+
+                        {turmaAtual?.alunos.length === 0 ? (
+                            <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                                <h3 className="font-bold text-gray-800 mb-2">Turma Vazia</h3>
+                                <p className="text-sm text-gray-500 mb-4">Cole a lista de alunos (um por linha).</p>
+                                <textarea rows="8" value={bulkText} onChange={e => setBulkText(e.target.value)} placeholder="João Silva&#10;Maria Oliveira..." className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm mb-3 font-medium outline-none" />
+                                <button onClick={handleBulkInsert} className="w-full bg-slate-800 text-white p-3 rounded-lg font-bold flex justify-center items-center gap-2">
+                                    <i className="fas fa-users"></i> Inserir Alunos
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                                    <h3 className="font-bold text-gray-800">{turmaAtual.nome} - {turmaAtual.alunos.length} Alunos</h3>
+                                    <button onClick={() => setPrintMode('cards')} className="text-slate-600 bg-white border border-gray-200 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 hover:bg-gray-50 shadow-sm">
+                                        <i className="fas fa-qrcode"></i> Cartões QR
+                                    </button>
+                                </div>
+                                <div className="p-4">
+                                    <div className="flex gap-2 mb-4">
+                                        <input type="text" value={newStudentName} onChange={e => setNewStudentName(e.target.value)} placeholder="Aluno novato..." className="flex-1 p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-medium outline-none" />
+                                        <button onClick={handleAddSingleStudent} className="bg-emerald-600 text-white px-3 rounded-lg flex items-center gap-1 text-sm font-bold shadow-sm hover:bg-emerald-700">
+                                            <i className="fas fa-plus"></i> Add
+                                        </button>
+                                    </div>
+                                    <div className="divide-y divide-gray-50 max-h-[60vh] overflow-y-auto pr-2">
+                                        {turmaAtual.alunos.map((aluno, idx) => (
+                                            <div key={aluno.id} className="py-3 flex justify-between items-center">
+                                                <div className="flex items-center gap-3">
+                                                    <span className="text-gray-400 text-xs font-bold">{idx+1}.</span>
+                                                    <span className="text-gray-800 text-xs font-bold">{aluno.nome}</span>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-[10px] font-mono bg-gray-100 px-2 py-1 rounded text-gray-500">{aluno.codigo}</span>
+                                                    <button onClick={() => handleRemoveStudent(aluno.id)} className="text-red-400 hover:bg-red-50 p-2 rounded transition-colors" title="Excluir Aluno">
+                                                        <i className="fas fa-trash"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                );
+            };
 
             const renderRelatorios = () => {
                 const turmaAtual = turmas.find(t => t.nome === selectedTurma);
                 const aulasDaTurma = aulas.filter(a => a.turma === selectedTurma);
                 return (
                     <div className="space-y-4">
-                        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-wrap gap-2">
-                             {turmas.map(t => (
-                                <button key={t.nome} onClick={() => setSelectedTurma(t.nome)} className={`px-4 py-2 rounded-full font-medium text-sm ${selectedTurma === t.nome ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>{t.nome}</button>
-                            ))}
-                        </div>
-                        
-                        {/* BOTÕES DE SINCRONIZAÇÃO */}
-                        <div className="grid grid-cols-2 gap-2">
-                            <button onClick={exportData} className="bg-emerald-600 text-white p-3 rounded-lg font-bold text-xs"><i className="fas fa-download mr-1"></i> Exportar Backup</button>
+                        <div className="grid grid-cols-2 gap-3 mb-2">
+                            <button onClick={exportData} className="bg-emerald-600 text-white p-3 rounded-xl font-bold text-xs flex justify-center items-center gap-2 shadow-sm"><i className="fas fa-download"></i> Exportar Backup</button>
                             <input type="file" ref={fileInputRef} onChange={importData} className="hidden" accept=".json" />
-                            <button onClick={() => fileInputRef.current.click()} className="bg-blue-600 text-white p-3 rounded-lg font-bold text-xs"><i className="fas fa-upload mr-1"></i> Importar Backup</button>
+                            <button onClick={() => fileInputRef.current.click()} className="bg-slate-800 text-white p-3 rounded-xl font-bold text-xs flex justify-center items-center gap-2 shadow-sm"><i className="fas fa-upload"></i> Importar Backup</button>
+                        </div>
+
+                        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-wrap gap-2">
+                            {turmas.map(t => (
+                                <button key={t.nome} onClick={() => setSelectedTurma(t.nome)} className={`px-4 py-2 rounded-full font-bold text-xs transition-colors ${selectedTurma === t.nome ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-500'}`}>{t.nome}</button>
+                            ))}
                         </div>
 
                         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-                             <table className="w-full text-sm">
-                                <thead>
-                                    <tr className="bg-gray-50">
-                                        <th className="p-2">Aluno</th>
-                                        <th className="p-2">Total P</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {turmaAtual?.alunos.map(aluno => {
-                                        const presencas = aulasDaTurma.filter(a => a.presencas.includes(aluno.id)).length;
-                                        return (
-                                            <tr key={aluno.id} className="border-t">
-                                                <td className="p-2 font-bold">{aluno.nome}</td>
-                                                <td className="p-2 text-center text-blue-600 font-bold">{presencas}</td>
+                            <div className="flex justify-between items-center mb-4">
+                                <h3 className="font-bold text-gray-800">Tabela do Diário</h3>
+                                <button onClick={() => setPrintMode('report')} className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-2 shadow-sm">
+                                    <i className="fas fa-print"></i> Imprimir Diário
+                                </button>
+                            </div>
+                            
+                            <div className="text-xs text-gray-500 mb-3 bg-gray-50 p-2 rounded border border-gray-100">
+                                <b>Legenda:</b> P (Presente), F (Falta), ND (Negativa), AM (Atest. Médico), PS (Prob. Saúde)
+                            </div>
+
+                            {aulasDaTurma.length === 0 ? <p className="text-gray-500 text-sm text-center py-6 font-medium">Nenhuma aula para imprimir.</p> : (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-xs text-left whitespace-nowrap">
+                                        <thead className="text-[10px] text-gray-500 uppercase bg-gray-100 font-bold">
+                                            <tr>
+                                                <th className="px-3 py-2 rounded-tl-lg">Aluno</th>
+                                                {aulasDaTurma.map(aula => <th key={aula.id} className="px-2 py-2 text-center" title={aula.titulo}>{aula.data.split('-').reverse().slice(0,2).join('/')}</th>)}
+                                                <th className="px-3 py-2 text-center rounded-tr-lg">Total P</th>
                                             </tr>
-                                        )
-                                    })}
-                                </tbody>
-                             </table>
+                                        </thead>
+                                        <tbody>
+                                            {turmaAtual?.alunos.map(aluno => {
+                                                const totalP = aulasDaTurma.filter(a => a.registros[aluno.id] === 'P').length;
+                                                return (
+                                                    <tr key={aluno.id} className="border-b border-gray-50 hover:bg-gray-50">
+                                                        <td className="px-3 py-2 font-bold text-gray-800 truncate max-w-[120px]">{aluno.nome}</td>
+                                                        {aulasDaTurma.map(aula => {
+                                                            const status = aula.registros[aluno.id] || 'F';
+                                                            let cor = 'text-gray-400';
+                                                            if(status === 'P') cor = 'text-emerald-500';
+                                                            if(status === 'F' || status === 'ND') cor = 'text-red-500';
+                                                            if(status === 'AM' || status === 'PS') cor = 'text-blue-500';
+                                                            return <td key={aula.id} className={`px-2 py-2 text-center font-bold ${cor}`}>{status}</td>
+                                                        })}
+                                                        <td className="px-3 py-2 text-center font-black text-blue-600 bg-blue-50">{totalP}</td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
                         </div>
                     </div>
                 );
             };
 
+            if (printMode === 'cards') {
+                const turmaAtual = turmas.find(t => t.nome === selectedTurma);
+                return (
+                    <div className="bg-white min-h-screen p-8 print:p-0">
+                        <div className="print:hidden mb-6 flex justify-between items-center bg-gray-100 p-4 rounded-xl">
+                            <button onClick={() => setPrintMode(null)} className="bg-gray-300 text-gray-800 px-4 py-2 rounded-lg font-bold"><i className="fas fa-arrow-left"></i> Voltar</button>
+                            <button onClick={() => window.print()} className="bg-slate-800 text-white px-4 py-2 rounded-lg font-bold flex gap-2"><i className="fas fa-print"></i> Imprimir</button>
+                        </div>
+                        <div className="text-center mb-8">
+                            <h1 className="text-2xl font-bold uppercase">Cartões QR - {selectedTurma}</h1>
+                            <p className="text-gray-500 font-medium">Educação Física</p>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 print:gap-2">
+                            {turmaAtual?.alunos.map(aluno => (
+                                <div key={aluno.id} className="border-2 border-dashed border-gray-400 p-4 rounded-xl flex flex-col items-center text-center page-break-inside-avoid">
+                                    <h3 className="font-bold text-xs mb-1 truncate w-full uppercase">{aluno.nome}</h3>
+                                    <p className="text-[10px] text-gray-500 mb-2 font-bold">{selectedTurma}</p>
+                                    <img src={`https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${aluno.codigo}`} alt="QR" className="w-20 h-20 mb-2" />
+                                    <div className="bg-gray-200 px-3 py-1 rounded font-mono text-sm font-bold tracking-widest">{aluno.codigo}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                );
+            }
+
+            if (printMode === 'report') {
+                const turmaAtual = turmas.find(t => t.nome === selectedTurma);
+                const aulasDaTurma = aulas.filter(a => a.turma === selectedTurma);
+                return (
+                    <div className="bg-white min-h-screen p-8 print:p-0">
+                        <div className="print:hidden mb-6 flex justify-between items-center bg-gray-100 p-4 rounded-xl">
+                            <button onClick={() => setPrintMode(null)} className="bg-gray-300 px-4 py-2 rounded-lg font-bold"><i className="fas fa-arrow-left"></i> Voltar</button>
+                            <button onClick={() => window.print()} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold flex gap-2"><i className="fas fa-print"></i> Imprimir Diário</button>
+                        </div>
+                        <div className="mb-6 border-b-4 border-slate-800 pb-4">
+                            <h1 className="text-2xl font-black uppercase">Diário Prático - Educação Física</h1>
+                            <h2 className="text-xl font-bold text-gray-600">Turma: {selectedTurma}</h2>
+                        </div>
+                        <table className="w-full text-sm text-left border-collapse border border-gray-400">
+                            <thead>
+                                <tr className="bg-gray-200">
+                                    <th className="border border-gray-400 p-2 font-bold">ALUNO</th>
+                                    {aulasDaTurma.map(aula => <th key={aula.id} className="border border-gray-400 p-1 text-center text-[10px] font-bold">{aula.data.split('-').reverse().slice(0,2).join('/')}</th>)}
+                                    <th className="border border-gray-400 p-2 text-center font-bold">TOTAL P</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {turmaAtual?.alunos.map(aluno => {
+                                    const totalP = aulasDaTurma.filter(a => a.registros[aluno.id] === 'P').length;
+                                    return (
+                                        <tr key={aluno.id}>
+                                            <td className="border border-gray-400 p-1.5 text-xs font-bold uppercase">{aluno.nome}</td>
+                                            {aulasDaTurma.map(aula => {
+                                                const status = aula.registros[aluno.id] || 'F';
+                                                return <td key={aula.id} className="border border-gray-400 p-1 text-center font-bold text-[10px]">{status}</td>
+                                            })}
+                                            <td className="border border-gray-400 p-1 text-center font-black bg-gray-100">{totalP}</td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                );
+            }
+
             return (
-                <div className="min-h-screen bg-gray-100 flex justify-center">
-                    <div className="w-full max-w-md bg-gray-50 min-h-screen flex flex-col">
-                        <header className="bg-blue-600 text-white p-5">
-                            <h1 className="text-xl font-bold">EduFísica - Diário</h1>
+                <div className="min-h-screen bg-gray-200 font-sans sm:py-8 flex justify-center">
+                    <div className="w-full max-w-md bg-gray-100 min-h-screen sm:min-h-[800px] sm:h-[800px] sm:rounded-3xl sm:shadow-2xl sm:border-8 border-slate-900 relative overflow-hidden flex flex-col">
+                        
+                        {/* Header Azul Escuro */}
+                        <header className="bg-slate-900 text-white p-5 pt-8 sm:pt-5 rounded-b-3xl shadow-lg z-10">
+                            <h1 className="text-2xl font-black tracking-tight flex items-center gap-3">
+                                <i className="fas fa-running text-emerald-400"></i> EduFísica
+                            </h1>
+                            <p className="text-slate-300 text-xs font-bold mt-1 tracking-widest uppercase">Controle de Aulas • Online</p>
                         </header>
-                        <main className="flex-1 p-4">
-                            {activeTab === 'relatorios' ? renderRelatorios() : <p className="p-4 text-center">Navegue pelas abas</p>}
+
+                        {/* Conteúdo Central */}
+                        <main className="flex-1 overflow-y-auto p-4 pb-24 scrollbar-hide">
+                            {activeTab === 'aulas' && renderAulas()}
+                            {activeTab === 'turmas' && renderTurmas()}
+                            {activeTab === 'relatorios' && renderRelatorios()}
                         </main>
-                        <nav className="flex justify-between p-4 bg-white border-t">
-                            <button onClick={() => setActiveTab('aulas')}>Aulas</button>
-                            <button onClick={() => setActiveTab('turmas')}>Turmas</button>
-                            <button onClick={() => setActiveTab('relatorios')}>Relatórios</button>
+
+                        {/* Navegação Inferior (Bottom Bar) */}
+                        <nav className="absolute bottom-0 w-full bg-white border-t border-gray-200 px-6 py-3 pb-6 sm:pb-3 flex justify-between items-center z-10 shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
+                            <button onClick={() => setActiveTab('aulas')} className={`flex flex-col items-center gap-1 transition-colors w-16 ${activeTab === 'aulas' ? 'text-emerald-600' : 'text-gray-400'}`}>
+                                <i className="fas fa-clipboard-list text-xl"></i>
+                                <span className="text-[10px] font-bold">Diário</span>
+                            </button>
+                            <button onClick={() => setActiveTab('turmas')} className={`flex flex-col items-center gap-1 transition-colors w-16 ${activeTab === 'turmas' ? 'text-slate-800' : 'text-gray-400'}`}>
+                                <i className="fas fa-users text-xl"></i>
+                                <span className="text-[10px] font-bold">Turmas</span>
+                            </button>
+                            <button onClick={() => setActiveTab('relatorios')} className={`flex flex-col items-center gap-1 transition-colors w-16 ${activeTab === 'relatorios' ? 'text-blue-600' : 'text-gray-400'}`}>
+                                <i className="fas fa-chart-pie text-xl"></i>
+                                <span className="text-[10px] font-bold">Relatórios</span>
+                            </button>
                         </nav>
                     </div>
                 </div>
             );
         }
+
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
